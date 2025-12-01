@@ -1,0 +1,28 @@
+server:
+  port: "8080"
+
+event_store:
+  type: "memory"  # Options: "memory", "eventstoredb"
+  # For eventstoredb:
+  # url: "http://eventstore:2113"
+  # username: "admin"
+  # password: "changeit"
+
+cassandra:
+  hosts:
+    - "localhost"
+  keyspace: "metachat"
+  consistency: "QUORUM"
+  # For production:
+  # username: "cassandra"
+  # password: "cassandra"
+
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic_prefix: "metachat"
+  consumer_group: "diary-service"
+
+logging:
+  level: "info"
+  format: "json"
