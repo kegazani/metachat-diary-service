@@ -2,38 +2,34 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gocql/gocql"
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/viper"
 
-	"github.com/metachat/common/event-sourcing/aggregates"
-	"github.com/metachat/common/event-sourcing/serializer"
-	"github.com/metachat/common/event-sourcing/store"
-	"github.com/metachat/config/logging"
 	"metachat/diary-service/internal/api"
+	"metachat/diary-service/internal/grpc"
 	"metachat/diary-service/internal/handlers"
 	"metachat/diary-service/internal/kafka"
+	"metachat/diary-service/internal/metrics"
 	"metachat/diary-service/internal/repository"
 	"metachat/diary-service/internal/service"
+
+	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	"github.com/kegazani/metachat-event-sourcing/serializer"
+	"github.com/kegazani/metachat-event-sourcing/store"
+	"github.com/sirupsen/logrus"
 )
 
 func main() {
-	// Initialize logger
-	loggerConfig := logging.LoggerConfig{
-		ServiceName: "diary-service",
-		Environment: viper.GetString("environment"),
-		LogLevel:    viper.GetString("log.level"),
-		LogFormat:   viper.GetString("log.format"),
-		LogOutput:   viper.GetString("log.output"),
-	}
-	logger := logging.NewLogger(loggerConfig)
-
 	// Load configuration
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -41,8 +37,39 @@ func main() {
 	viper.AddConfigPath("/app/config")
 
 	if err := viper.ReadInConfig(); err != nil {
-		logger.Fatalf("Failed to read config file: %v", err)
+		log.Fatalf("Failed to read config file: %v", err)
 	}
+
+	// Initialize logger with config
+	logger := logrus.New()
+
+	// Configure logging from config
+	logLevel := viper.GetString("logging.level")
+	switch logLevel {
+	case "debug":
+		logger.SetLevel(logrus.DebugLevel)
+	case "info":
+		logger.SetLevel(logrus.InfoLevel)
+	case "warn":
+		logger.SetLevel(logrus.WarnLevel)
+	case "error":
+		logger.SetLevel(logrus.ErrorLevel)
+	default:
+		logger.SetLevel(logrus.InfoLevel)
+	}
+
+	logFormat := viper.GetString("logging.format")
+	if logFormat == "json" {
+		logger.SetFormatter(&logrus.JSONFormatter{})
+	} else {
+		logger.SetFormatter(&logrus.TextFormatter{})
+	}
+
+	logger.WithFields(logrus.Fields{
+		"service": viper.GetString("service.name"),
+		"version": viper.GetString("service.version"),
+		"env":     viper.GetString("service.environment"),
+	}).Info("Starting diary service")
 
 	// Initialize event store
 	var eventStore store.EventStore
@@ -51,6 +78,7 @@ func main() {
 	switch eventStoreType {
 	case "memory":
 		eventStore = store.NewMemoryEventStore()
+		logger.Info("Using in-memory event store")
 	case "eventstoredb":
 		// TODO: Implement EventStoreDB client
 		logger.Fatal("EventStoreDB client not implemented yet")
@@ -62,16 +90,71 @@ func main() {
 	// Initialize serializer
 	serializer := serializer.NewJSONSerializer()
 
-	// Initialize Cassandra cluster
-	cluster := gocql.NewCluster(viper.GetString("cassandra.hosts"))
-	cluster.Keyspace = viper.GetString("cassandra.keyspace")
-	cluster.Consistency = gocql.Quorum
-	cluster.Timeout = 10 * time.Second
+	// Initialize Cassandra connection
+	hosts := viper.GetStringSlice("cassandra.hosts")
+	if len(hosts) == 0 {
+		if h := viper.GetString("cassandra.hosts"); h != "" {
+			hosts = []string{h}
+		}
+	}
 
-	// Create Cassandra session
-	session, err := cluster.CreateSession()
+	var session *gocql.Session
+	var err error
+
+	// Parse timeout from config
+	timeout, err := time.ParseDuration(viper.GetString("cassandra.timeout"))
 	if err != nil {
-		logger.Fatalf("Failed to connect to Cassandra: %v", err)
+		timeout = 10 * time.Second
+		logger.Warnf("Invalid Cassandra timeout, using default: %v", timeout)
+	}
+
+	// Parse reconnect interval from config
+	reconnectInterval, err := time.ParseDuration(viper.GetString("cassandra.reconnect_interval"))
+	if err != nil {
+		reconnectInterval = 10 * time.Second
+		logger.Warnf("Invalid Cassandra reconnect interval, using default: %v", reconnectInterval)
+	}
+
+	// Parse consistency level
+	consistency := gocql.Quorum
+	switch viper.GetString("cassandra.consistency") {
+	case "ONE":
+		consistency = gocql.One
+	case "QUORUM":
+		consistency = gocql.Quorum
+	case "ALL":
+		consistency = gocql.All
+	case "LOCAL_QUORUM":
+		consistency = gocql.LocalQuorum
+	}
+
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		cluster := gocql.NewCluster(hosts...)
+		cluster.Keyspace = viper.GetString("cassandra.keyspace")
+		cluster.Consistency = consistency
+		cluster.Timeout = timeout
+		cluster.NumConns = viper.GetInt("cassandra.num_connections")
+
+		// Set authentication if provided
+		if username := viper.GetString("cassandra.username"); username != "" {
+			cluster.Authenticator = gocql.PasswordAuthenticator{
+				Username: username,
+				Password: viper.GetString("cassandra.password"),
+			}
+		}
+
+		session, err = cluster.CreateSession()
+		if err == nil {
+			logger.Info("Successfully connected to Cassandra")
+			break
+		}
+		logger.WithError(err).Warnf("Failed to connect to Cassandra (attempt %d/%d), retrying...", i+1, maxRetries)
+		time.Sleep(reconnectInterval)
+	}
+
+	if err != nil {
+		logger.Fatalf("Failed to connect to Cassandra after %d attempts: %v", maxRetries, err)
 	}
 	defer session.Close()
 
@@ -85,9 +168,9 @@ func main() {
 	}
 
 	// Initialize Kafka producer
-	kafkaBootstrapServers := viper.GetString("kafka.bootstrap_servers")
+	kafkaBrokers := viper.GetStringSlice("kafka.brokers")
 	kafkaTopic := viper.GetString("kafka.diary_events_topic")
-	diaryEventProducer, err := kafka.NewDiaryEventProducer(kafkaBootstrapServers, kafkaTopic)
+	diaryEventProducer, err := kafka.NewDiaryEventProducer(strings.Join(kafkaBrokers, ","), kafkaTopic)
 	if err != nil {
 		logger.Fatalf("Failed to create diary event producer: %v", err)
 	}
@@ -108,23 +191,63 @@ func main() {
 	router := mux.NewRouter()
 	api.SetupRoutes(router, diaryHandler)
 
+	// Initialize metrics if enabled
+	if viper.GetBool("metrics.enabled") {
+		metricsInstance := metrics.NewMetrics()
+		router.Use(metricsInstance.HTTPMiddleware)
+
+		// Setup metrics endpoint
+		router.Path(viper.GetString("metrics.path")).Handler(promhttp.Handler())
+
+		// Start metrics server in a goroutine
+		go func() {
+			metricsPort := viper.GetString("metrics.port")
+			metricsRouter := mux.NewRouter()
+			metricsRouter.Path(viper.GetString("metrics.path")).Handler(promhttp.Handler())
+
+			metricsSrv := &http.Server{
+				Addr:    ":" + metricsPort,
+				Handler: metricsRouter,
+			}
+
+			logger.WithField("port", metricsPort).Info("Starting metrics server")
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.WithError(err).Error("Failed to start metrics server")
+			}
+		}()
+	}
+
+	// Parse server timeouts from config
+	readTimeout, _ := time.ParseDuration(viper.GetString("server.read_timeout"))
+	writeTimeout, _ := time.ParseDuration(viper.GetString("server.write_timeout"))
+	idleTimeout, _ := time.ParseDuration(viper.GetString("server.idle_timeout"))
+
 	// Create HTTP server
-	port := viper.GetString("server.port")
-	if port == "" {
-		port = "8080"
-	}
-
 	srv := &http.Server{
-		Addr:         ":" + port,
+		Addr:         viper.GetString("server.host") + ":" + viper.GetString("server.port"),
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
 	}
 
-	// Start server in a goroutine
+	// Start gRPC server in a goroutine if configured
 	go func() {
-		logger.Infof("Starting server on port %s", port)
+		grpcPort := viper.GetString("grpc.port")
+		logger.WithField("port", grpcPort).Info("Starting gRPC server")
+
+		if err := grpc.StartGRPCServer(diaryService, logger, grpcPort); err != nil {
+			logger.WithError(err).Error("Failed to start gRPC server")
+		}
+	}()
+
+	// Start HTTP server in a goroutine
+	go func() {
+		logger.WithFields(logrus.Fields{
+			"host": viper.GetString("server.host"),
+			"port": viper.GetString("server.port"),
+		}).Info("Starting HTTP server")
+
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Failed to start server: %v", err)
 		}

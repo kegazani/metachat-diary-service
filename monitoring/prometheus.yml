@@ -1,0 +1,55 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Diary Service metrics
+  - job_name: 'diary-service'
+    static_configs:
+      - targets: ['diary-service:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Kafka metrics (if JMX exporter is enabled)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9308']
+    scrape_interval: 30s
+
+  # Cassandra metrics (if JMX exporter is enabled)
+  - job_name: 'cassandra'
+    static_configs:
+      - targets: ['cassandra:7070']
+    scrape_interval: 30s
+
+  # Zookeeper metrics (if JMX exporter is enabled)
+  - job_name: 'zookeeper'
+    static_configs:
+      - targets: ['zookeeper:7071']
+    scrape_interval: 30s
+
+  # NATS metrics
+  - job_name: 'nats'
+    static_configs:
+      - targets: ['nats:8222']
+    metrics_path: '/varz'
+    scrape_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Example rules for alerting
+# rule_files:
+#   - "diary_service_rules.yml"

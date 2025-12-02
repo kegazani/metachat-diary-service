@@ -7,10 +7,11 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
-	"github.com/metachat/common/event-sourcing/aggregates"
-	"github.com/metachat/common/event-sourcing/serializer"
-	"github.com/metachat/common/event-sourcing/store"
 	"metachat/diary-service/internal/service"
+
+	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	"github.com/kegazani/metachat-event-sourcing/serializer"
+	"github.com/kegazani/metachat-event-sourcing/store"
 )
 
 // DiaryHandler handles HTTP requests for diary operations

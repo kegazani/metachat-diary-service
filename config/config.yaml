@@ -1,28 +1,86 @@
-server:
-  port: "8080"
+# Сервис
+service:
+  name: "diary-service"
+  version: "1.0.0"
+  environment: "development"  # development, staging, production
 
+# HTTP сервер
+server:
+  host: "0.0.0.0"
+  port: "9093"
+  read_timeout: "15s"
+  write_timeout: "15s"
+  idle_timeout: "60s"
+
+# gRPC сервер
+grpc:
+  host: "0.0.0.0"
+  port: "50051"
+  timeout: "30s"
+
+# Event Store
 event_store:
-  type: "memory"  # Options: "memory", "eventstoredb"
-  # For eventstoredb:
-  # url: "http://eventstore:2113"
+  type: "memory"  # memory, eventstoredb
+  # Для EventStoreDB:
+  url: "http://localhost:2113"
   # username: "admin"
   # password: "changeit"
+  # timeout: "10s"
 
+# Cassandra
 cassandra:
   hosts:
     - "localhost"
+  port: "9042"
   keyspace: "metachat"
   consistency: "QUORUM"
-  # For production:
+  timeout: "10s"
+  reconnect_interval: "10s"
+  num_connections: 2
+  # Для production:
   # username: "cassandra"
   # password: "cassandra"
 
+# Kafka
 kafka:
   brokers:
-    - "kafka:9092"
-  topic_prefix: "metachat"
-  consumer_group: "diary-service"
+    - "localhost:9092"
+  diary_events_topic: "diary-events"
+  session_events_topic: "session-events"
+  consumer_group: "diary-service-group"
+  timeout: "10s"
 
+# NATS (альтернатива Kafka)
+# nats:
+#   url: "nats://localhost:4222"
+#   diary_events_subject: "diary.events"
+#   session_events_subject: "session.events"
+#   timeout: "10s"
+
+# Логирование
 logging:
-  level: "info"
-  format: "json"
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json, text
+
+# Метрики
+metrics:
+  enabled: true
+  port: "9090"
+  path: "/metrics"
+
+# Безопасность
+security:
+  jwt_secret: "your-jwt-secret-key"
+  jwt_expiration: "24h"
+
+# Rate limiting
+rate_limit:
+  enabled: true
+  requests_per_minute: 100
+  burst: 200
+
+# Health check
+health:
+  enabled: true
+  endpoint: "/health"
+  check_interval: "30s"

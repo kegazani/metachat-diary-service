@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/metachat/common/event-sourcing/events"
+	"github.com/kegazani/metachat-event-sourcing/events"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
@@ -30,12 +30,6 @@ type diaryEventProducer struct {
 func NewDiaryEventProducer(bootstrapServers, topic string) (DiaryEventProducer, error) {
 	config := &kafka.ConfigMap{
 		"bootstrap.servers": bootstrapServers,
-		"acks":              "all",
-		"retries":           3,
-		"retry.backoff.ms":  100,
-		"linger.ms":         10,
-		"buffer.memory":     33554432, // 32MB
-		"compression.type":  "snappy",
 	}
 
 	producer, err := kafka.NewProducer(config)

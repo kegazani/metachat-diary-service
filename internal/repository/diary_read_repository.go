@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/metachat/common/event-sourcing/events"
 	"metachat/diary-service/internal/models"
+
+	"github.com/kegazani/metachat-event-sourcing/events"
 
 	"github.com/gocql/gocql"
 )

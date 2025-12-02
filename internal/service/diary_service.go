@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/metachat/common/event-sourcing/aggregates"
 	"metachat/diary-service/internal/kafka"
 	"metachat/diary-service/internal/models"
 	"metachat/diary-service/internal/repository"
+
+	"github.com/kegazani/metachat-event-sourcing/aggregates"
 
 	"github.com/sirupsen/logrus"
 )

@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/metachat/common/event-sourcing/events"
+	"github.com/kegazani/metachat-event-sourcing/events"
 )
 
 // DiaryEntryReadModel represents the read model for diary entries in Cassandra

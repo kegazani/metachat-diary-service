@@ -3,10 +3,10 @@ package repository
 import (
 	"context"
 
-	"github.com/metachat/common/event-sourcing/aggregates"
-	"github.com/metachat/common/event-sourcing/events"
-	"github.com/metachat/common/event-sourcing/serializer"
-	"github.com/metachat/common/event-sourcing/store"
+	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	"github.com/kegazani/metachat-event-sourcing/events"
+	"github.com/kegazani/metachat-event-sourcing/serializer"
+	"github.com/kegazani/metachat-event-sourcing/store"
 )
 
 // DiaryRepository defines the interface for diary repository operations

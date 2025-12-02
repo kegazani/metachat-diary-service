@@ -12,10 +12,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/metachat/common/event-sourcing/aggregates"
 	"metachat/diary-service/internal/models"
 	"metachat/diary-service/internal/service"
-	pb "github.com/metachat/proto/generated/diary"
+
+	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	pb "github.com/kegazani/metachat-proto/diary"
 )
 
 // DiaryServer implements the gRPC DiaryService interface
@@ -79,7 +80,7 @@ func (s *DiaryServer) UpdateDiaryEntry(ctx context.Context, req *pb.UpdateDiaryE
 }
 
 // DeleteDiaryEntry deletes a diary entry
-func (s *DiaryServer) DeleteDiaryEntry(ctx context.Context, req *pb.DeleteDiaryEntryRequest) (*emptypb.Empty, error) {
+func (s *DiaryServer) DeleteDiaryEntry(ctx context.Context, req *pb.DeleteDiaryEntryRequest) (*pb.DeleteDiaryEntryResponse, error) {
 	s.logger.WithField("entry_id", req.Id).Info("Deleting diary entry via gRPC")
 
 	err := s.diaryService.DeleteDiaryEntry(ctx, req.Id)
@@ -88,7 +89,9 @@ func (s *DiaryServer) DeleteDiaryEntry(ctx context.Context, req *pb.DeleteDiaryE
 		return nil, fmt.Errorf("failed to delete diary entry: %w", err)
 	}
 
-	return &emptypb.Empty{}, nil
+	return &pb.DeleteDiaryEntryResponse{
+		Empty: &emptypb.Empty{},
+	}, nil
 }
 
 // StartDiarySession starts a new diary session
@@ -439,7 +442,13 @@ func StartGRPCServer(diaryService service.DiaryService, logger *logrus.Logger, p
 		return fmt.Errorf("failed to listen on port %s: %w", port, err)
 	}
 
-	s := grpc.NewServer()
+	// Configure gRPC server with reasonable defaults
+	opts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(4 * 1024 * 1024), // 4MB
+		grpc.MaxSendMsgSize(4 * 1024 * 1024), // 4MB
+	}
+
+	s := grpc.NewServer(opts...)
 	pb.RegisterDiaryServiceServer(s, NewDiaryServer(diaryService, logger))
 
 	// Enable reflection for development
