@@ -7,14 +7,11 @@ RUN apk add --no-cache git ca-certificates tzdata
 # Set working directory
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum ./
-
-# Download dependencies
+COPY metachat-event-sourcing ../metachat-event-sourcing
+COPY metachat-diary-service/go.mod metachat-diary-service/go.sum ./
 RUN go mod download
 
-# Copy source code
-COPY . .
+COPY metachat-diary-service/ .
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o diary-service cmd/main.go
@@ -35,8 +32,8 @@ WORKDIR /app
 # Copy binary from builder stage
 COPY --from=builder /app/diary-service .
 
-# Copy configuration files
-COPY --chown=appuser:appgroup config/ ./config/
+# Copy configuration files from builder stage
+COPY --from=builder --chown=appuser:appgroup /app/config/ ./config/
 
 # Create logs directory
 RUN mkdir -p /app/logs && chown appuser:appgroup /app/logs

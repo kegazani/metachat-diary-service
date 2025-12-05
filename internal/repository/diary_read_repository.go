@@ -10,6 +10,7 @@ import (
 	"github.com/kegazani/metachat-event-sourcing/events"
 
 	"github.com/gocql/gocql"
+	"github.com/google/uuid"
 )
 
 // DiaryReadRepository defines the interface for diary read model operations
@@ -65,15 +66,50 @@ func NewDiaryReadRepository(session *gocql.Session) DiaryReadRepository {
 	}
 }
 
+// stringToUUID converts a string to UUID. If string is already a valid UUID, returns it.
+// Otherwise, generates a deterministic UUID v5 based on the string.
+func stringToUUID(s string) (gocql.UUID, error) {
+	if s == "" {
+		return gocql.UUID{}, fmt.Errorf("empty string cannot be converted to UUID")
+	}
+
+	parsedUUID, err := uuid.Parse(s)
+	if err == nil {
+		return gocql.UUID(parsedUUID), nil
+	}
+
+	namespace := uuid.NameSpaceDNS
+	deterministicUUID := uuid.NewSHA1(namespace, []byte(s))
+	return gocql.UUID(deterministicUUID), nil
+}
+
 // SaveDiaryEntry saves a diary entry read model to Cassandra
 func (r *diaryReadRepository) SaveDiaryEntry(ctx context.Context, entry *models.DiaryEntryReadModel) error {
 	query := `INSERT INTO diary_entries_read_model (id, user_id, title, content, token_count, 
 		session_id, tags, deleted, created_at, updated_at, version) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+	idUUID, err := stringToUUID(entry.ID)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
+	userIDUUID, err := stringToUUID(entry.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
+	var sessionIDUUID gocql.UUID
+	if entry.SessionID != "" {
+		sessionIDUUID, err = stringToUUID(entry.SessionID)
+		if err != nil {
+			return fmt.Errorf("failed to convert session ID to UUID: %w", err)
+		}
+	}
+
 	return r.session.Query(query,
-		entry.ID, entry.UserID, entry.Title, entry.Content, entry.TokenCount,
-		entry.SessionID, entry.Tags, entry.Deleted, entry.CreatedAt, entry.UpdatedAt, entry.Version,
+		idUUID, userIDUUID, entry.Title, entry.Content, entry.TokenCount,
+		sessionIDUUID, entry.Tags, entry.Deleted, entry.CreatedAt, entry.UpdatedAt, entry.Version,
 	).Exec()
 }
 
@@ -83,8 +119,18 @@ func (r *diaryReadRepository) SaveDiaryEntryByUser(ctx context.Context, entryByU
 		created_at, token_count, tags, deleted) 
 		VALUES (?, ?, ?, ?, ?, ?, ?)`
 
+	userIDUUID, err := stringToUUID(entryByUser.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
+	entryIDUUID, err := stringToUUID(entryByUser.EntryID)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
 	return r.session.Query(query,
-		entryByUser.UserID, entryByUser.EntryID, entryByUser.Title,
+		userIDUUID, entryIDUUID, entryByUser.Title,
 		entryByUser.CreatedAt, entryByUser.TokenCount, entryByUser.Tags, entryByUser.Deleted,
 	).Exec()
 }
@@ -95,8 +141,18 @@ func (r *diaryReadRepository) SaveDiaryEntryByUserAndTime(ctx context.Context, e
 		title, created_at, token_count, tags, deleted) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
+	userIDUUID, err := stringToUUID(entryByUserAndTime.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
+	entryIDUUID, err := stringToUUID(entryByUserAndTime.EntryID)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
 	return r.session.Query(query,
-		entryByUserAndTime.UserID, entryByUserAndTime.YearMonth, entryByUserAndTime.EntryID,
+		userIDUUID, entryByUserAndTime.YearMonth, entryIDUUID,
 		entryByUserAndTime.Title, entryByUserAndTime.CreatedAt, entryByUserAndTime.TokenCount,
 		entryByUserAndTime.Tags, entryByUserAndTime.Deleted,
 	).Exec()
@@ -108,8 +164,18 @@ func (r *diaryReadRepository) SaveDiarySession(ctx context.Context, session *mod
 		source, entry_count, token_count, created_at, updated_at) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+	idUUID, err := stringToUUID(session.ID)
+	if err != nil {
+		return fmt.Errorf("failed to convert session ID to UUID: %w", err)
+	}
+
+	userIDUUID, err := stringToUUID(session.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
 	return r.session.Query(query,
-		session.ID, session.UserID, session.StartTime, session.EndTime,
+		idUUID, userIDUUID, session.StartTime, session.EndTime,
 		session.Source, session.EntryCount, session.TokenCount, session.CreatedAt, session.UpdatedAt,
 	).Exec()
 }
@@ -120,16 +186,31 @@ func (r *diaryReadRepository) GetDiaryEntryByID(ctx context.Context, entryID str
 		deleted, created_at, updated_at, version 
 		FROM diary_entries_read_model WHERE id = ?`
 
+	entryIDUUID, err := stringToUUID(entryID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
+	var idUUID, userIDUUID, sessionIDUUID gocql.UUID
 	var entry models.DiaryEntryReadModel
-	err := r.session.Query(query, entryID).Consistency(gocql.One).Scan(
-		&entry.ID, &entry.UserID, &entry.Title, &entry.Content, &entry.TokenCount,
-		&entry.SessionID, &entry.Tags, &entry.Deleted, &entry.CreatedAt, &entry.UpdatedAt, &entry.Version,
+	err = r.session.Query(query, entryIDUUID).Consistency(gocql.One).Scan(
+		&idUUID, &userIDUUID, &entry.Title, &entry.Content, &entry.TokenCount,
+		&sessionIDUUID, &entry.Tags, &entry.Deleted, &entry.CreatedAt, &entry.UpdatedAt, &entry.Version,
 	)
 	if err != nil {
 		if err == gocql.ErrNotFound {
 			return nil, fmt.Errorf("diary entry not found: %w", err)
 		}
 		return nil, fmt.Errorf("failed to get diary entry: %w", err)
+	}
+
+	entry.ID = uuid.UUID(idUUID).String()
+	entry.UserID = uuid.UUID(userIDUUID).String()
+	var zeroUUID gocql.UUID
+	if sessionIDUUID != zeroUUID {
+		entry.SessionID = uuid.UUID(sessionIDUUID).String()
+	} else {
+		entry.SessionID = ""
 	}
 
 	return &entry, nil
@@ -139,21 +220,27 @@ func (r *diaryReadRepository) GetDiaryEntryByID(ctx context.Context, entryID str
 func (r *diaryReadRepository) GetDiaryEntriesByUserID(ctx context.Context, userID string) ([]*models.DiaryEntryReadModel, error) {
 	query := `SELECT entry_id FROM diary_entries_by_user_read_model WHERE user_id = ?`
 
-	iter := r.session.Query(query, userID).Consistency(gocql.One).Iter()
-	var entryIDs []string
-	var entryID string
-	for iter.Scan(&entryID) {
-		entryIDs = append(entryIDs, entryID)
+	userIDUUID, err := stringToUUID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
+	iter := r.session.Query(query, userIDUUID).Consistency(gocql.One).Iter()
+	var entryIDs []gocql.UUID
+	var entryIDUUID gocql.UUID
+	for iter.Scan(&entryIDUUID) {
+		entryIDs = append(entryIDs, entryIDUUID)
 	}
 	if err := iter.Close(); err != nil {
 		return nil, fmt.Errorf("failed to get entry IDs: %w", err)
 	}
 
 	var entries []*models.DiaryEntryReadModel
-	for _, id := range entryIDs {
-		entry, err := r.GetDiaryEntryByID(ctx, id)
+	for _, idUUID := range entryIDs {
+		entryID := uuid.UUID(idUUID).String()
+		entry, err := r.GetDiaryEntryByID(ctx, entryID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get diary entry %s: %w", id, err)
+			return nil, fmt.Errorf("failed to get diary entry %s: %w", entryID, err)
 		}
 		entries = append(entries, entry)
 	}
@@ -163,6 +250,11 @@ func (r *diaryReadRepository) GetDiaryEntriesByUserID(ctx context.Context, userI
 
 // GetDiaryEntriesByUserIDAndTimeRange retrieves diary entries for a user within a time range
 func (r *diaryReadRepository) GetDiaryEntriesByUserIDAndTimeRange(ctx context.Context, userID string, startTime, endTime time.Time) ([]*models.DiaryEntryReadModel, error) {
+	userIDUUID, err := stringToUUID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
 	// Generate year-month combinations for the time range
 	var yearMonths []string
 	current := startTime
@@ -171,15 +263,15 @@ func (r *diaryReadRepository) GetDiaryEntriesByUserIDAndTimeRange(ctx context.Co
 		current = current.AddDate(0, 1, 0)
 	}
 
-	var entryIDs []string
+	var entryIDs []gocql.UUID
 	for _, yearMonth := range yearMonths {
 		query := `SELECT entry_id FROM diary_entries_by_user_and_time_read_model 
 			WHERE user_id = ? AND year_month = ?`
 
-		iter := r.session.Query(query, userID, yearMonth).Consistency(gocql.One).Iter()
-		var id string
-		for iter.Scan(&id) {
-			entryIDs = append(entryIDs, id)
+		iter := r.session.Query(query, userIDUUID, yearMonth).Consistency(gocql.One).Iter()
+		var idUUID gocql.UUID
+		for iter.Scan(&idUUID) {
+			entryIDs = append(entryIDs, idUUID)
 		}
 		if err := iter.Close(); err != nil {
 			return nil, fmt.Errorf("failed to get entry IDs for %s: %w", yearMonth, err)
@@ -187,10 +279,11 @@ func (r *diaryReadRepository) GetDiaryEntriesByUserIDAndTimeRange(ctx context.Co
 	}
 
 	var entries []*models.DiaryEntryReadModel
-	for _, id := range entryIDs {
-		entry, err := r.GetDiaryEntryByID(ctx, id)
+	for _, idUUID := range entryIDs {
+		entryID := uuid.UUID(idUUID).String()
+		entry, err := r.GetDiaryEntryByID(ctx, entryID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get diary entry %s: %w", id, err)
+			return nil, fmt.Errorf("failed to get diary entry %s: %w", entryID, err)
 		}
 		// Filter by exact time range
 		if (entry.CreatedAt.Equal(startTime) || entry.CreatedAt.After(startTime)) &&
@@ -208,14 +301,22 @@ func (r *diaryReadRepository) GetDiarySessionsByUserID(ctx context.Context, user
 		token_count, created_at, updated_at 
 		FROM diary_sessions_read_model WHERE user_id = ?`
 
-	iter := r.session.Query(query, userID).Consistency(gocql.One).Iter()
+	userIDUUID, err := stringToUUID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
+	iter := r.session.Query(query, userIDUUID).Consistency(gocql.One).Iter()
 	var sessions []*models.DiarySessionReadModel
+	var idUUID, userIDUUIDResult gocql.UUID
 	var session models.DiarySessionReadModel
 	for iter.Scan(
-		&session.ID, &session.UserID, &session.StartTime, &session.EndTime,
+		&idUUID, &userIDUUIDResult, &session.StartTime, &session.EndTime,
 		&session.Source, &session.EntryCount, &session.TokenCount,
 		&session.CreatedAt, &session.UpdatedAt,
 	) {
+		session.ID = uuid.UUID(idUUID).String()
+		session.UserID = uuid.UUID(userIDUUIDResult).String()
 		// Create a copy to append to the slice
 		sessionCopy := session
 		sessions = append(sessions, &sessionCopy)
@@ -233,9 +334,22 @@ func (r *diaryReadRepository) UpdateDiaryEntry(ctx context.Context, entry *model
 		session_id = ?, tags = ?, deleted = ?, updated_at = ?, version = ? 
 		WHERE id = ?`
 
+	idUUID, err := stringToUUID(entry.ID)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
+	var sessionIDUUID gocql.UUID
+	if entry.SessionID != "" {
+		sessionIDUUID, err = stringToUUID(entry.SessionID)
+		if err != nil {
+			return fmt.Errorf("failed to convert session ID to UUID: %w", err)
+		}
+	}
+
 	return r.session.Query(query,
 		entry.Title, entry.Content, entry.TokenCount,
-		entry.SessionID, entry.Tags, entry.Deleted, entry.UpdatedAt, entry.Version, entry.ID,
+		sessionIDUUID, entry.Tags, entry.Deleted, entry.UpdatedAt, entry.Version, idUUID,
 	).Exec()
 }
 
@@ -245,8 +359,13 @@ func (r *diaryReadRepository) UpdateDiarySession(ctx context.Context, session *m
 		token_count = ?, updated_at = ? 
 		WHERE id = ?`
 
+	idUUID, err := stringToUUID(session.ID)
+	if err != nil {
+		return fmt.Errorf("failed to convert session ID to UUID: %w", err)
+	}
+
 	return r.session.Query(query,
-		session.EndTime, session.EntryCount, session.TokenCount, session.UpdatedAt, session.ID,
+		session.EndTime, session.EntryCount, session.TokenCount, session.UpdatedAt, idUUID,
 	).Exec()
 }
 
@@ -258,19 +377,29 @@ func (r *diaryReadRepository) DeleteDiaryEntry(ctx context.Context, entryID stri
 		return err
 	}
 
+	entryIDUUID, err := stringToUUID(entryID)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry ID to UUID: %w", err)
+	}
+
+	userIDUUID, err := stringToUUID(entry.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to convert user ID to UUID: %w", err)
+	}
+
 	// Delete from main table
-	if err := r.session.Query(`DELETE FROM diary_entries_read_model WHERE id = ?`, entryID).Exec(); err != nil {
+	if err := r.session.Query(`DELETE FROM diary_entries_read_model WHERE id = ?`, entryIDUUID).Exec(); err != nil {
 		return fmt.Errorf("failed to delete diary entry: %w", err)
 	}
 
 	// Delete from user index
-	if err := r.session.Query(`DELETE FROM diary_entries_by_user_read_model WHERE user_id = ? AND entry_id = ?`, entry.UserID, entryID).Exec(); err != nil {
+	if err := r.session.Query(`DELETE FROM diary_entries_by_user_read_model WHERE user_id = ? AND entry_id = ?`, userIDUUID, entryIDUUID).Exec(); err != nil {
 		return fmt.Errorf("failed to delete diary entry by user: %w", err)
 	}
 
 	// Delete from user and time index
 	yearMonth := entry.CreatedAt.Format("2006-01")
-	if err := r.session.Query(`DELETE FROM diary_entries_by_user_and_time_read_model WHERE user_id = ? AND year_month = ? AND entry_id = ?`, entry.UserID, yearMonth, entryID).Exec(); err != nil {
+	if err := r.session.Query(`DELETE FROM diary_entries_by_user_and_time_read_model WHERE user_id = ? AND year_month = ? AND entry_id = ?`, userIDUUID, yearMonth, entryIDUUID).Exec(); err != nil {
 		return fmt.Errorf("failed to delete diary entry by user and time: %w", err)
 	}
 
@@ -425,6 +554,12 @@ func (r *diaryReadRepository) processDiarySessionEndedEvent(ctx context.Context,
 
 // InitializeTables creates the necessary tables for diary read models in Cassandra
 func (r *diaryReadRepository) InitializeTables() error {
+	// Drop existing tables to recreate with correct schema (UUID)
+	r.session.Query(`DROP TABLE IF EXISTS diary_entries_read_model`).Exec()
+	r.session.Query(`DROP TABLE IF EXISTS diary_entries_by_user_read_model`).Exec()
+	r.session.Query(`DROP TABLE IF EXISTS diary_entries_by_user_and_time_read_model`).Exec()
+	r.session.Query(`DROP TABLE IF EXISTS diary_sessions_read_model`).Exec()
+
 	// Create diary_entries_read_model table
 	if err := r.session.Query(`CREATE TABLE IF NOT EXISTS diary_entries_read_model (
 		id UUID PRIMARY KEY,

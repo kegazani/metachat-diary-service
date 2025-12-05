@@ -15,17 +15,16 @@ server:
 # gRPC сервер
 grpc:
   host: "0.0.0.0"
-  port: "50051"
+  port: "50052"
   timeout: "30s"
 
 # Event Store
 event_store:
-  type: "memory"  # memory, eventstoredb
-  # Для EventStoreDB:
-  url: "http://localhost:2113"
-  # username: "admin"
-  # password: "changeit"
-  # timeout: "10s"
+  type: "eventstoredb"  # memory, eventstoredb
+  url: "http://localhost:2113"  # Use localhost for local development, eventstore:2113 for Docker
+  username: "admin"
+  password: "changeit"
+  stream_prefix: "metachat-diary"
 
 # Cassandra
 cassandra:
@@ -45,10 +44,48 @@ cassandra:
 kafka:
   brokers:
     - "localhost:9092"
-  diary_events_topic: "diary-events"
-  session_events_topic: "session-events"
   consumer_group: "diary-service-group"
   timeout: "10s"
+  diary_events_topic: "diary-events"
+  
+  topics:
+    diary_events: "diary-events"
+    session_events: "session-events"
+    diary_entry_created: "metachat.diary.entry.created"
+    diary_entry_updated: "metachat.diary.entry.updated"
+    diary_entry_deleted: "metachat.diary.entry.deleted"
+    
+  all_kafka_topics:
+    user_service:
+      - "metachat-user-events"
+    diary_service:
+      - "diary-events"
+      - "session-events"
+      - "metachat.diary.entry.created"
+      - "metachat.diary.entry.updated"
+      - "metachat.diary.entry.deleted"
+    mood_analysis_service:
+      - "metachat.diary.entry.created"
+      - "metachat.diary.entry.updated"
+      - "metachat.mood.analyzed"
+      - "metachat.mood.analysis.failed"
+    analytics_service:
+      - "metachat.mood.analyzed"
+      - "metachat.diary.entry.created"
+      - "metachat.diary.entry.deleted"
+      - "metachat.archetype.updated"
+    archetype_service:
+      - "metachat.mood.analyzed"
+      - "metachat.diary.entry.created"
+      - "metachat.archetype.assigned"
+      - "metachat.archetype.updated"
+      - "metachat.archetype.calculation.triggered"
+    biometric_service:
+      - "metachat.biometric.data.received"
+    correlation_service:
+      - "metachat.mood.analyzed"
+      - "metachat.biometric.data.received"
+      - "metachat.correlation.discovered"
 
 # NATS (альтернатива Kafka)
 # nats:

@@ -9,10 +9,15 @@ import (
 	"metachat/diary-service/internal/models"
 	"metachat/diary-service/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	"github.com/kegazani/metachat-event-sourcing/events"
+	"github.com/kegazani/metachat-event-sourcing/store"
 
 	"github.com/sirupsen/logrus"
 )
+
+const maxRetries = 3
 
 // DiaryService defines the interface for diary service operations
 type DiaryService interface {
@@ -65,77 +70,120 @@ func NewDiaryService(diaryRepository repository.DiaryRepository, diaryReadReposi
 
 // CreateDiaryEntry creates a new diary entry
 func (s *diaryService) CreateDiaryEntry(ctx context.Context, userID, title, content string, tokenCount int, sessionID string, tags []string) (*aggregates.DiaryAggregate, error) {
-	// Create new diary aggregate
-	diary := aggregates.NewDiaryAggregate("")
+	var diary *aggregates.DiaryAggregate
+	var err error
 
-	// Create diary entry
-	if err := diary.CreateEntry(userID, title, content, tokenCount, sessionID, tags); err != nil {
-		return nil, err
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		diaryID := uuid.New().String()
+		diary = aggregates.NewDiaryAggregate(diaryID)
+
+		if err = diary.CreateEntry(userID, title, content, tokenCount, sessionID, tags); err != nil {
+			return nil, err
+		}
+
+		events := diary.GetUncommittedEvents()
+		if err = s.diaryRepository.SaveDiary(ctx, diary); err != nil {
+			if isVersionConflict(err) {
+				time.Sleep(time.Millisecond * time.Duration(10*(attempt+1)))
+				continue
+			}
+			return nil, err
+		}
+
+		for _, event := range events {
+			if err = s.diaryReadRepository.ProcessDiaryEvent(ctx, event); err != nil {
+				logrus.WithError(err).Error("Failed to process diary event for read model")
+			}
+		}
+
+		if err = s.publishDiaryEvents(ctx, events); err != nil {
+			logrus.WithError(err).Error("Failed to publish diary events to Kafka")
+		}
+
+		return diary, nil
 	}
 
-	// Save diary
-	if err := s.diaryRepository.SaveDiary(ctx, diary); err != nil {
-		return nil, err
-	}
-
-	// Publish event to Kafka
-	if err := s.publishDiaryEvents(ctx, diary); err != nil {
-		logrus.WithError(err).Error("Failed to publish diary events to Kafka")
-	}
-
-	return diary, nil
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }
 
 // UpdateDiaryEntry updates an existing diary entry
 func (s *diaryService) UpdateDiaryEntry(ctx context.Context, diaryID, title, content string, tokenCount int, tags []string) (*aggregates.DiaryAggregate, error) {
-	// Get diary by ID
-	diary, err := s.diaryRepository.GetDiaryByID(ctx, diaryID)
-	if err != nil {
-		return nil, err
+	var diary *aggregates.DiaryAggregate
+	var err error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		diary, err = s.diaryRepository.GetDiaryByID(ctx, diaryID)
+		if err != nil {
+			return nil, err
+		}
+
+		if err = diary.UpdateEntry(title, content, tokenCount, tags); err != nil {
+			return nil, err
+		}
+
+		events := diary.GetUncommittedEvents()
+		if err = s.diaryRepository.SaveDiary(ctx, diary); err != nil {
+			if isVersionConflict(err) {
+				time.Sleep(time.Millisecond * time.Duration(10*(attempt+1)))
+				continue
+			}
+			return nil, err
+		}
+
+		for _, event := range events {
+			if err = s.diaryReadRepository.ProcessDiaryEvent(ctx, event); err != nil {
+				logrus.WithError(err).Error("Failed to process diary event for read model")
+			}
+		}
+
+		if err = s.publishDiaryEvents(ctx, events); err != nil {
+			logrus.WithError(err).Error("Failed to publish diary events to Kafka")
+		}
+
+		return diary, nil
 	}
 
-	// Update diary entry
-	if err := diary.UpdateEntry(title, content, tokenCount, tags); err != nil {
-		return nil, err
-	}
-
-	// Save diary
-	if err := s.diaryRepository.SaveDiary(ctx, diary); err != nil {
-		return nil, err
-	}
-
-	// Publish event to Kafka
-	if err := s.publishDiaryEvents(ctx, diary); err != nil {
-		logrus.WithError(err).Error("Failed to publish diary events to Kafka")
-	}
-
-	return diary, nil
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }
 
 // DeleteDiaryEntry deletes a diary entry
 func (s *diaryService) DeleteDiaryEntry(ctx context.Context, diaryID string) error {
-	// Get diary by ID
-	diary, err := s.diaryRepository.GetDiaryByID(ctx, diaryID)
-	if err != nil {
-		return err
+	var diary *aggregates.DiaryAggregate
+	var err error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		diary, err = s.diaryRepository.GetDiaryByID(ctx, diaryID)
+		if err != nil {
+			return err
+		}
+
+		if err = diary.DeleteEntry("user requested deletion"); err != nil {
+			return err
+		}
+
+		events := diary.GetUncommittedEvents()
+		if err = s.diaryRepository.SaveDiary(ctx, diary); err != nil {
+			if isVersionConflict(err) {
+				time.Sleep(time.Millisecond * time.Duration(10*(attempt+1)))
+				continue
+			}
+			return err
+		}
+
+		for _, event := range events {
+			if err = s.diaryReadRepository.ProcessDiaryEvent(ctx, event); err != nil {
+				logrus.WithError(err).Error("Failed to process diary event for read model")
+			}
+		}
+
+		if err = s.publishDiaryEvents(ctx, events); err != nil {
+			logrus.WithError(err).Error("Failed to publish diary events to Kafka")
+		}
+
+		return nil
 	}
 
-	// Delete diary entry
-	if err := diary.DeleteEntry("user requested deletion"); err != nil {
-		return err
-	}
-
-	// Save diary
-	if err := s.diaryRepository.SaveDiary(ctx, diary); err != nil {
-		return err
-	}
-
-	// Publish event to Kafka
-	if err := s.publishDiaryEvents(ctx, diary); err != nil {
-		logrus.WithError(err).Error("Failed to publish diary events to Kafka")
-	}
-
-	return nil
+	return fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }
 
 // GetDiaryEntryByID retrieves a diary entry by ID
@@ -173,16 +221,16 @@ func (s *diaryService) GetDiarySessionReadModelsByUserID(ctx context.Context, us
 	return s.diaryReadRepository.GetDiarySessionsByUserID(ctx, userID)
 }
 
-// publishDiaryEvents publishes all uncommitted events for a diary to Kafka
-func (s *diaryService) publishDiaryEvents(ctx context.Context, diary *aggregates.DiaryAggregate) error {
-	events := diary.GetUncommittedEvents()
+// publishDiaryEvents publishes diary events to Kafka
+func (s *diaryService) publishDiaryEvents(ctx context.Context, events []*events.Event) error {
 	for _, event := range events {
 		if err := s.diaryEventProducer.PublishDiaryEvent(ctx, event); err != nil {
 			return fmt.Errorf("failed to publish diary event: %w", err)
 		}
 	}
-
-	// Mark events as committed
-	diary.ClearUncommittedEvents()
 	return nil
+}
+
+func isVersionConflict(err error) bool {
+	return store.GetEventStoreErrorCode(err) == store.ErrCodeVersionConflict
 }

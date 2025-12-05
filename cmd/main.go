@@ -24,13 +24,17 @@ import (
 	"metachat/diary-service/internal/service"
 
 	"github.com/kegazani/metachat-event-sourcing/aggregates"
+	"github.com/kegazani/metachat-event-sourcing/events"
 	"github.com/kegazani/metachat-event-sourcing/serializer"
 	"github.com/kegazani/metachat-event-sourcing/store"
 	"github.com/sirupsen/logrus"
 )
 
 func main() {
-	// Load configuration
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("./config")
@@ -80,8 +84,29 @@ func main() {
 		eventStore = store.NewMemoryEventStore()
 		logger.Info("Using in-memory event store")
 	case "eventstoredb":
-		// TODO: Implement EventStoreDB client
-		logger.Fatal("EventStoreDB client not implemented yet")
+		eventStoreURL := viper.GetString("event_store.url")
+		if eventStoreURL == "" {
+			eventStoreURL = "http://localhost:2113"
+		}
+		eventStoreUsername := viper.GetString("event_store.username")
+		if eventStoreUsername == "" {
+			eventStoreUsername = "admin"
+		}
+		eventStorePassword := viper.GetString("event_store.password")
+		if eventStorePassword == "" {
+			eventStorePassword = "changeit"
+		}
+		streamPrefix := viper.GetString("event_store.stream_prefix")
+		if streamPrefix == "" {
+			streamPrefix = "metachat-diary"
+		}
+
+		esdbStore, err := store.NewEventStoreDBEventStoreFromConfig(eventStoreURL, eventStoreUsername, eventStorePassword, streamPrefix)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to create EventStoreDB client")
+		}
+		eventStore = esdbStore
+		logger.Info("Using EventStoreDB event store")
 	default:
 		eventStore = store.NewMemoryEventStore()
 		logger.Warn("Using in-memory event store (not suitable for production)")
@@ -169,8 +194,27 @@ func main() {
 
 	// Initialize Kafka producer
 	kafkaBrokers := viper.GetStringSlice("kafka.brokers")
-	kafkaTopic := viper.GetString("kafka.diary_events_topic")
-	diaryEventProducer, err := kafka.NewDiaryEventProducer(strings.Join(kafkaBrokers, ","), kafkaTopic)
+	defaultTopic := viper.GetString("kafka.diary_events_topic")
+	if defaultTopic == "" {
+		defaultTopic = viper.GetString("kafka.topics.diary_events")
+	}
+	if defaultTopic == "" {
+		defaultTopic = "diary-events"
+	}
+
+	// Build topic map for different event types
+	topicMap := make(map[events.EventType]string)
+	if createdTopic := viper.GetString("kafka.topics.diary_entry_created"); createdTopic != "" {
+		topicMap[events.DiaryEntryCreatedEvent] = createdTopic
+	}
+	if updatedTopic := viper.GetString("kafka.topics.diary_entry_updated"); updatedTopic != "" {
+		topicMap[events.DiaryEntryUpdatedEvent] = updatedTopic
+	}
+	if deletedTopic := viper.GetString("kafka.topics.diary_entry_deleted"); deletedTopic != "" {
+		topicMap[events.DiaryEntryDeletedEvent] = deletedTopic
+	}
+
+	diaryEventProducer, err := kafka.NewDiaryEventProducer(strings.Join(kafkaBrokers, ","), defaultTopic, topicMap)
 	if err != nil {
 		logger.Fatalf("Failed to create diary event producer: %v", err)
 	}
