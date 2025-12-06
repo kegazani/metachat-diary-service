@@ -39,6 +39,9 @@ type DiaryReadRepository interface {
 	// GetDiarySessionsByUserID retrieves all diary sessions for a user
 	GetDiarySessionsByUserID(ctx context.Context, userID string) ([]*models.DiarySessionReadModel, error)
 
+	// GetDiarySessionByID retrieves a diary session read model by ID
+	GetDiarySessionByID(ctx context.Context, sessionID string) (*models.DiarySessionReadModel, error)
+
 	// UpdateDiaryEntry updates a diary entry read model in Cassandra
 	UpdateDiaryEntry(ctx context.Context, entry *models.DiaryEntryReadModel) error
 
@@ -328,6 +331,37 @@ func (r *diaryReadRepository) GetDiarySessionsByUserID(ctx context.Context, user
 	return sessions, nil
 }
 
+// GetDiarySessionByID retrieves a diary session read model by ID
+func (r *diaryReadRepository) GetDiarySessionByID(ctx context.Context, sessionID string) (*models.DiarySessionReadModel, error) {
+	query := `SELECT id, user_id, start_time, end_time, source, entry_count, 
+		token_count, created_at, updated_at 
+		FROM diary_sessions_read_model WHERE id = ?`
+
+	sessionIDUUID, err := stringToUUID(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert session ID to UUID: %w", err)
+	}
+
+	var idUUID, userIDUUID gocql.UUID
+	var session models.DiarySessionReadModel
+	err = r.session.Query(query, sessionIDUUID).Consistency(gocql.One).Scan(
+		&idUUID, &userIDUUID, &session.StartTime, &session.EndTime,
+		&session.Source, &session.EntryCount, &session.TokenCount,
+		&session.CreatedAt, &session.UpdatedAt,
+	)
+	if err != nil {
+		if err == gocql.ErrNotFound {
+			return nil, fmt.Errorf("diary session not found: %w", err)
+		}
+		return nil, fmt.Errorf("failed to get diary session: %w", err)
+	}
+
+	session.ID = uuid.UUID(idUUID).String()
+	session.UserID = uuid.UUID(userIDUUID).String()
+
+	return &session, nil
+}
+
 // UpdateDiaryEntry updates a diary entry read model in Cassandra
 func (r *diaryReadRepository) UpdateDiaryEntry(ctx context.Context, entry *models.DiaryEntryReadModel) error {
 	query := `UPDATE diary_entries_read_model SET title = ?, content = ?, token_count = ?, 
@@ -520,23 +554,9 @@ func (r *diaryReadRepository) processDiarySessionStartedEvent(ctx context.Contex
 
 // processDiarySessionEndedEvent processes a DiarySessionEnded event
 func (r *diaryReadRepository) processDiarySessionEndedEvent(ctx context.Context, event *events.Event) error {
-	// Get existing session
-	sessions, err := r.GetDiarySessionsByUserID(ctx, "")
+	session, err := r.GetDiarySessionByID(ctx, event.AggregateID)
 	if err != nil {
-		return fmt.Errorf("failed to get diary sessions: %w", err)
-	}
-
-	// Find the session with matching ID
-	var session *models.DiarySessionReadModel
-	for _, s := range sessions {
-		if s.ID == event.AggregateID {
-			session = s
-			break
-		}
-	}
-
-	if session == nil {
-		return fmt.Errorf("session not found: %s", event.AggregateID)
+		return fmt.Errorf("failed to get diary session: %w", err)
 	}
 
 	// Update session from event

@@ -36,7 +36,11 @@ func NewDiaryServer(diaryService service.DiaryService, logger *logrus.Logger) *D
 
 // CreateDiaryEntry creates a new diary entry
 func (s *DiaryServer) CreateDiaryEntry(ctx context.Context, req *pb.CreateDiaryEntryRequest) (*pb.CreateDiaryEntryResponse, error) {
-	s.logger.WithField("user_id", req.UserId).Info("Creating diary entry via gRPC")
+	correlationID := GetCorrelationID(ctx)
+	s.logger.WithFields(logrus.Fields{
+		"correlation_id": correlationID,
+		"user_id":        req.UserId,
+	}).Info("Creating diary entry via gRPC")
 
 	entry, err := s.diaryService.CreateDiaryEntry(ctx, req.UserId, req.Title, req.Content, int(req.TokenCount), req.SessionId, req.Tags)
 	if err != nil {
@@ -123,24 +127,27 @@ func (s *DiaryServer) StartDiarySession(ctx context.Context, req *pb.StartDiaryS
 
 // EndDiarySession ends a diary session
 func (s *DiaryServer) EndDiarySession(ctx context.Context, req *pb.EndDiarySessionRequest) (*pb.EndDiarySessionResponse, error) {
-	s.logger.WithField("session_id", req.Id).Info("Ending diary session via gRPC")
+	correlationID := GetCorrelationID(ctx)
+	s.logger.WithFields(logrus.Fields{
+		"correlation_id": correlationID,
+		"session_id":     req.Id,
+	}).Info("Ending diary session via gRPC")
 
-	// EndDiarySession is not implemented in the service interface yet
-	// For now, return a mock session
+	sessionReadModel, err := s.diaryService.GetDiarySessionReadModelByID(ctx, req.Id)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get diary session")
+		return nil, fmt.Errorf("failed to get diary session: %w", err)
+	}
+
 	session := &aggregates.DiarySession{
-		ID:          req.Id,
-		UserID:      "user-id",
-		Title:       "Session Title",
-		Description: "Session Description",
-		StartedAt:   time.Now().Add(-1 * time.Hour),
+		ID:          sessionReadModel.ID,
+		UserID:      sessionReadModel.UserID,
+		Title:       "",
+		Description: "",
+		StartedAt:   sessionReadModel.StartTime,
 		EndedAt:     time.Now(),
 		Status:      "ended",
-		EntryCount:  1,
-	}
-	err := error(nil)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to end diary session")
-		return nil, fmt.Errorf("failed to end diary session: %w", err)
+		EntryCount:  sessionReadModel.EntryCount,
 	}
 
 	return &pb.EndDiarySessionResponse{
@@ -150,24 +157,27 @@ func (s *DiaryServer) EndDiarySession(ctx context.Context, req *pb.EndDiarySessi
 
 // GetDiarySession retrieves a diary session by ID
 func (s *DiaryServer) GetDiarySession(ctx context.Context, req *pb.GetDiarySessionRequest) (*pb.GetDiarySessionResponse, error) {
-	s.logger.WithField("session_id", req.Id).Info("Getting diary session via gRPC")
+	correlationID := GetCorrelationID(ctx)
+	s.logger.WithFields(logrus.Fields{
+		"correlation_id": correlationID,
+		"session_id":     req.Id,
+	}).Info("Getting diary session via gRPC")
 
-	// GetDiarySession is not implemented in the service interface yet
-	// For now, return a mock session
-	session := &aggregates.DiarySession{
-		ID:          req.Id,
-		UserID:      "user-id",
-		Title:       "Session Title",
-		Description: "Session Description",
-		StartedAt:   time.Now().Add(-1 * time.Hour),
-		EndedAt:     time.Time{},
-		Status:      "active",
-		EntryCount:  0,
-	}
-	err := error(nil)
+	sessionReadModel, err := s.diaryService.GetDiarySessionReadModelByID(ctx, req.Id)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get diary session")
 		return nil, fmt.Errorf("failed to get diary session: %w", err)
+	}
+
+	session := &aggregates.DiarySession{
+		ID:          sessionReadModel.ID,
+		UserID:      sessionReadModel.UserID,
+		Title:       "",
+		Description: "",
+		StartedAt:   sessionReadModel.StartTime,
+		EndedAt:     sessionReadModel.EndTime,
+		Status:      "active",
+		EntryCount:  sessionReadModel.EntryCount,
 	}
 
 	return &pb.GetDiarySessionResponse{
@@ -192,22 +202,13 @@ func (s *DiaryServer) GetDiaryEntryReadModel(ctx context.Context, req *pb.GetDia
 
 // GetDiarySessionReadModel retrieves a diary session read model
 func (s *DiaryServer) GetDiarySessionReadModel(ctx context.Context, req *pb.GetDiarySessionReadModelRequest) (*pb.GetDiarySessionReadModelResponse, error) {
-	s.logger.WithField("session_id", req.Id).Info("Getting diary session read model via gRPC")
+	correlationID := GetCorrelationID(ctx)
+	s.logger.WithFields(logrus.Fields{
+		"correlation_id": correlationID,
+		"session_id":     req.Id,
+	}).Info("Getting diary session read model via gRPC")
 
-	// GetDiarySessionReadModel is not implemented in the service interface yet
-	// For now, return a mock session read model
-	session := &models.DiarySessionReadModel{
-		ID:         req.Id,
-		UserID:     "user-id",
-		StartTime:  time.Now().Add(-1 * time.Hour),
-		EndTime:    time.Now(),
-		Source:     "grpc",
-		EntryCount: 1,
-		TokenCount: 100,
-		CreatedAt:  time.Now().Add(-1 * time.Hour),
-		UpdatedAt:  time.Now(),
-	}
-	err := error(nil)
+	session, err := s.diaryService.GetDiarySessionReadModelByID(ctx, req.Id)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get diary session read model")
 		return nil, fmt.Errorf("failed to get diary session read model: %w", err)
@@ -446,6 +447,7 @@ func StartGRPCServer(diaryService service.DiaryService, logger *logrus.Logger, p
 	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(4 * 1024 * 1024), // 4MB
 		grpc.MaxSendMsgSize(4 * 1024 * 1024), // 4MB
+		grpc.UnaryInterceptor(CorrelationIDInterceptor(logger)),
 	}
 
 	s := grpc.NewServer(opts...)

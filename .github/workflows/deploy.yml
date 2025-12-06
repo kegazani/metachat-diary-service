@@ -21,5 +21,3 @@ jobs:
           ssh -o StrictHostKeyChecking=no $SERVICES_USER@$SERVICES_HOST "mkdir -p /opt/metachat-services/diary-service"
           rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" ./ $SERVICES_USER@$SERVICES_HOST:/opt/metachat-services/diary-service
           ssh -o StrictHostKeyChecking=no $SERVICES_USER@$SERVICES_HOST "cd /opt/metachat-services/diary-service && docker build -t metachat/diary-service:latest . && docker service update --image metachat/diary-service:latest metachat-services_diary-service || docker service create --name metachat-services_diary-service --network metachat_overlay metachat/diary-service:latest"
-
-

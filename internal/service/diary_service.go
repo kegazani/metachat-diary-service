@@ -50,6 +50,9 @@ type DiaryService interface {
 
 	// GetDiarySessionReadModelsByUserID retrieves all diary session read models for a user
 	GetDiarySessionReadModelsByUserID(ctx context.Context, userID string) ([]*models.DiarySessionReadModel, error)
+
+	// GetDiarySessionReadModelByID retrieves a diary session read model by ID
+	GetDiarySessionReadModelByID(ctx context.Context, sessionID string) (*models.DiarySessionReadModel, error)
 }
 
 // diaryService is the implementation of DiaryService
@@ -219,6 +222,11 @@ func (s *diaryService) GetDiaryEntryReadModelsByUserIDAndTimeRange(ctx context.C
 // GetDiarySessionReadModelsByUserID retrieves all diary session read models for a user
 func (s *diaryService) GetDiarySessionReadModelsByUserID(ctx context.Context, userID string) ([]*models.DiarySessionReadModel, error) {
 	return s.diaryReadRepository.GetDiarySessionsByUserID(ctx, userID)
+}
+
+// GetDiarySessionReadModelByID retrieves a diary session read model by ID
+func (s *diaryService) GetDiarySessionReadModelByID(ctx context.Context, sessionID string) (*models.DiarySessionReadModel, error) {
+	return s.diaryReadRepository.GetDiarySessionByID(ctx, sessionID)
 }
 
 // publishDiaryEvents publishes diary events to Kafka
